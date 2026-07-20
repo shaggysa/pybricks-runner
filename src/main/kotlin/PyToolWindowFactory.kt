@@ -643,8 +643,8 @@ class PyToolWindowFactory : ToolWindowFactory {
                     } else {
                         progressBar.isVisible = true
                         progressBar.value = event.percentage.toInt()
-                        progressBar.string = "Downloading: ${String.format("%.1f", event.percentage)}%"
-                        updateStatus("Downloading...")
+                        progressBar.string = "${String.format("%.1f", event.percentage)}%"
+                        updateStatus("Downloading... ")
                     }
                 }
                 is IncomingEvent.ProgramStarted -> {
