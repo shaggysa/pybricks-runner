@@ -1,15 +1,17 @@
 package xyz.shaggysa
 
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
@@ -39,6 +41,8 @@ fun findUvxExecutable(): String {
     return "uvx"
 }
 
+data class BleDeviceInfo(val deviceName: String, val address: String, var rssi: Int)
+
 class PyToolWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
 
@@ -50,47 +54,166 @@ class PyToolWindowFactory : ToolWindowFactory {
         pyToolWindow.startSubprocess()
     }
 
-    class ConnectionDialog(
-        project: Project,
-        defaultType: ConnectionType,
-        defaultHubName: String?
+    class BleScanDialog(
+        private val project: Project,
+        private val stateService: PyStateService,
+        private val onConnecting: (ConnectionType, String?) -> Unit,
+        private val onConnected: () -> Unit,
+        private val onStatusUpdate: (String) -> Unit,
+        private val onUIUpdate: () -> Unit
     ) : DialogWrapper(project) {
-        val connTypeCombo = ComboBox(arrayOf("Bluetooth", "USB")).apply {
-            selectedIndex = if (defaultType == ConnectionType.Bluetooth) 0 else 1
+        private class ScanListModel<E> : DefaultListModel<E>() {
+            fun fireChanged(idx: Int) = fireContentsChanged(this, idx, idx)
         }
-        val hubNameField = JBTextField(defaultHubName ?: "")
+        private val deviceListModel = ScanListModel<BleDeviceInfo>()
+        private val deviceList = JBList(deviceListModel)
+        private val refreshBtn = JButton("Refresh")
+        private val scanTimer = Timer(10_000) { stopScan() }
+
+        private fun signalBars(rssi: Int): String = when {
+            rssi >= -50 -> "\u2588\u2588\u2588\u2588"
+            rssi >= -65 -> "\u2588\u2588\u2588\u2581"
+            rssi >= -75 -> "\u2588\u2588\u2581\u2581"
+            else        -> "\u2588\u2581\u2581\u2581"
+        }
+
+        private val bleListener: (IncomingEvent) -> Unit = { event ->
+            SwingUtilities.invokeLater {
+                when (event) {
+                    is IncomingEvent.BleDeviceFound -> {
+                        val device = BleDeviceInfo(event.deviceName, event.address, event.rssi)
+                        val idx = (0 until deviceListModel.size()).firstOrNull { deviceListModel[it].address == device.address }
+                        if (idx != null) {
+                            deviceListModel[idx].rssi = device.rssi
+                            deviceListModel.fireChanged(idx)
+                        } else {
+                            deviceListModel.addElement(device)
+                        }
+                    }
+                    is IncomingEvent.HubConnected -> {
+                        onConnected()
+                        close(OK_EXIT_CODE)
+                    }
+                    is IncomingEvent.ConnectionTimeout -> {
+                        onStatusUpdate("Connection Timeout")
+                        onUIUpdate()
+                    }
+                    is IncomingEvent.PreconditionViolated -> {
+                        Messages.showWarningDialog(project, "Precondition violated:\n${event.explanation}", "Precondition Violated")
+                    }
+                    else -> { /* ignore */ }
+                }
+            }
+        }
 
         init {
-            title = "Connect to Pybricks Hub"
+            title = "Scan for Bluetooth Hubs"
+            setOKButtonText("Connect")
             init()
         }
 
         override fun createCenterPanel(): JComponent {
-            val panel = JPanel(GridBagLayout())
-            val gbc = GridBagConstraints().apply {
-                insets = JBUI.insets(6)
-                fill = GridBagConstraints.HORIZONTAL
+            val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
+                preferredSize = Dimension(450, 300)
             }
-            
-            gbc.gridx = 0
-            gbc.gridy = 0
-            gbc.weightx = 0.0
-            panel.add(JLabel("Connection Type:"), gbc)
-            
-            gbc.gridx = 1
-            gbc.weightx = 1.0
-            panel.add(connTypeCombo, gbc)
 
-            gbc.gridx = 0
-            gbc.gridy = 1
-            gbc.weightx = 0.0
-            panel.add(JLabel("Hub Name (Optional):"), gbc)
-            
-            gbc.gridx = 1
-            gbc.weightx = 1.0
-            panel.add(hubNameField, gbc)
+            deviceList.cellRenderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>, value: Any?, index: Int,
+                    isSelected: Boolean, cellHasFocus: Boolean
+                ): Component {
+                    val c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                    if (value is BleDeviceInfo) {
+                        text = "${signalBars(value.rssi)}  ${value.deviceName} (${value.address})"
+                    }
+                    return c
+                }
+            }
+            panel.add(JBScrollPane(deviceList), BorderLayout.CENTER)
+
+            val buttonPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 0))
+            refreshBtn.addActionListener { startScan() }
+            buttonPanel.add(refreshBtn)
+            panel.add(buttonPanel, BorderLayout.SOUTH)
+
+            startScan()
 
             return panel
+        }
+
+        private fun startScan() {
+            val activeState = stateService.pyState
+            if (activeState == null || !activeState.isRunning) {
+                Messages.showErrorDialog(project, "The Pybricks Runner background process is not running.", "Subprocess Error")
+                return
+            }
+            deviceListModel.clear()
+            refreshBtn.isEnabled = false
+            scanTimer.restart()
+            activeState.addEventListener(bleListener)
+            try {
+                activeState.sendEvent(OutgoingEvent.StartBleScanning(10.0))
+            } catch (e: Exception) {
+                scanTimer.stop()
+                refreshBtn.isEnabled = true
+                activeState.removeEventListener(bleListener)
+                Messages.showErrorDialog(project, "Could not start BLE scan:\n${e.localizedMessage}", "Scan Error")
+            }
+        }
+
+        private fun stopScan() {
+            scanTimer.stop()
+            refreshBtn.isEnabled = true
+            stateService.pyState?.removeEventListener(bleListener)
+        }
+
+        override fun doOKAction() {
+            val selectedDevice = deviceList.selectedValue
+            if (selectedDevice == null) {
+                Messages.showWarningDialog(project, "Please select a device to connect to.", "No Device Selected")
+                return
+            }
+            val activeState = stateService.pyState
+            if (activeState == null || !activeState.isRunning) {
+                Messages.showErrorDialog(project, "The Pybricks Runner background process is not running.", "Subprocess Error")
+                return
+            }
+            scanTimer.stop()
+            stateService.pyState?.removeEventListener(bleListener)
+            
+            // Disable connect button while sending
+            getOKAction()?.isEnabled = false
+            
+            onConnecting(ConnectionType.Bluetooth, selectedDevice.deviceName)
+            onStatusUpdate("Connecting...")
+            onUIUpdate()
+            
+            Thread {
+                try {
+                    activeState.sendEvent(OutgoingEvent.ConnectToHub(ConnectionType.Bluetooth, selectedDevice.address))
+                    SwingUtilities.invokeLater {
+                        close(OK_EXIT_CODE)
+                    }
+                } catch (e: Exception) {
+                    SwingUtilities.invokeLater {
+                        getOKAction()?.isEnabled = true
+                        onStatusUpdate("Disconnected")
+                        onUIUpdate()
+                        Messages.showErrorDialog(project, "Could not send connect command:\n${e.localizedMessage}", "Connection Error")
+                    }
+                }
+            }.apply {
+                name = "ble-connect-send"
+                isDaemon = true
+                start()
+            }
+        }
+
+        override fun doCancelAction() {
+            scanTimer.stop()
+            stateService.pyState?.removeEventListener(bleListener)
+            super.doCancelAction()
         }
     }
 
@@ -104,7 +227,6 @@ class PyToolWindowFactory : ToolWindowFactory {
         private var isConnected = false
         private var isConnecting = false
         private var isProgramRunning = false
-        private var selectedType = ConnectionType.Bluetooth
         private var selectedHubName: String? = null
         
         private var pendingAction: Runnable? = null
@@ -266,9 +388,11 @@ class PyToolWindowFactory : ToolWindowFactory {
                     BorderFactory.createEmptyBorder(6, 10, 6, 10)
                 )
             }
-            
+
+            val hubDesc = if (selectedHubName != null) "$selectedHubName" else "hub"
+
             if (isConnected) {
-                val hubDesc = if (selectedHubName != null) "$selectedHubName (${selectedType.name})" else "Hub (${selectedType.name})"
+
                 innerPanel.add(JLabel("Connected to $hubDesc"), BorderLayout.WEST)
                 
                 val disconnectBtn = JButton("Disconnect").apply {
@@ -282,7 +406,7 @@ class PyToolWindowFactory : ToolWindowFactory {
                 }
                 innerPanel.add(disconnectBtn, BorderLayout.EAST)
             } else if (isConnecting) {
-                innerPanel.add(JLabel("Connecting to hub..."), BorderLayout.WEST)
+                innerPanel.add(JLabel("Connecting to $hubDesc..."), BorderLayout.WEST)
                 
                 val cancelBtn = JButton("Cancel").apply {
                     addActionListener {
@@ -299,7 +423,7 @@ class PyToolWindowFactory : ToolWindowFactory {
                 }
                 innerPanel.add(cancelBtn, BorderLayout.EAST)
             } else {
-                innerPanel.add(JLabel("Not connected to a hub"), BorderLayout.WEST)
+                innerPanel.add(JLabel("Not connected"), BorderLayout.WEST)
                 
                 val connectBtn = JButton("Connect to Hub...").apply {
                     addActionListener {
@@ -326,30 +450,29 @@ class PyToolWindowFactory : ToolWindowFactory {
                 return
             }
             
-            val dialog = ConnectionDialog(project, selectedType, selectedHubName)
-            if (dialog.showAndGet()) {
-                selectedType = if (dialog.connTypeCombo.selectedIndex == 0) ConnectionType.Bluetooth else ConnectionType.Usb
-                selectedHubName = dialog.hubNameField.text.trim().let { if (it.isEmpty()) null else it }
-                
-                isConnecting = true
-                updateStatus("Connecting...")
-                updateControlsState()
-                updateTopConnectionPanel()
-                
-                // Store the pending action to execute once connection is established
-                pendingAction = onConnected
-                
-                try {
-                    activeState.sendEvent(OutgoingEvent.ConnectToHub(selectedType, selectedHubName))
-                } catch (e: Exception) {
+            pendingAction = onConnected
+            
+            val bleDialog = BleScanDialog(
+                project, stateService,
+                onConnecting = { _, name ->
+                    isConnecting = true
+                    selectedHubName = name
+                },
+                onConnected = {
+                    isConnected = true
                     isConnecting = false
-                    pendingAction = null
-                    updateStatus("Disconnected")
+                    isProgramRunning = false
+                    updateStatus("Connected")
                     updateControlsState()
                     updateTopConnectionPanel()
-                    Messages.showErrorDialog(project, "Could not send connect command:\n${e.localizedMessage}", "Connection Error")
-                }
-            }
+                    val action = pendingAction
+                    pendingAction = null
+                    action?.run()
+                },
+                onStatusUpdate = { updateStatus(it) },
+                onUIUpdate = { updateControlsState(); updateTopConnectionPanel() }
+            )
+            bleDialog.show()
         }
 
         private fun setupInteractions() {
@@ -489,9 +612,7 @@ class PyToolWindowFactory : ToolWindowFactory {
             consecutiveCrashes = 0
 
             when (event) {
-                is IncomingEvent.BleDeviceFound -> {
-                    // Do not log or show BLE scans to the console
-                }
+                is IncomingEvent.BleDeviceFound -> { /* handled by BleScanDialog */ }
                 is IncomingEvent.HubConnected -> {
                     isConnected = true
                     isConnecting = false
@@ -642,5 +763,26 @@ class PyToolWindowFactory : ToolWindowFactory {
             runStoredBtn.isEnabled = isProcessRunning && !isProgramRunning
             cancelBtn.isEnabled = isProcessRunning && isProgramRunning
         }
+    }
+}
+
+class ScanBleHubsAction : AnAction() {
+    override fun actionPerformed(event: AnActionEvent) {
+        val project = event.project ?: return
+        val stateService = project.getService(PyStateService::class.java)
+        val activeState = stateService?.pyState
+        if (activeState == null || !activeState.isRunning) {
+            Messages.showErrorDialog(project, "The Pybricks Runner background process is not running.", "Subprocess Error")
+            return
+        }
+
+        val bleDialog = PyToolWindowFactory.BleScanDialog(
+            project, stateService,
+            onConnecting = { _, _ -> },
+            onConnected = { },
+            onStatusUpdate = { },
+            onUIUpdate = { }
+        )
+        bleDialog.show()
     }
 }

@@ -30,6 +30,11 @@
     </extensions>
 
     <actions>
-        <action id="xyz.shaggysa.SendEventAction" class="xyz.shaggysa.SendEventAction" text="Send Event"/>
+        <group id="xyz.shaggysa.PybricksMenu" text="Pybricks" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="xyz.shaggysa.ScanBleHubsAction" class="xyz.shaggysa.ScanBleHubsAction"
+                    text="Scan for Bluetooth Hubs"/>
+            <action id="xyz.shaggysa.SendEventAction" class="xyz.shaggysa.SendEventAction" text="Send Event"/>
+        </group>
     </actions>
 </idea-plugin>

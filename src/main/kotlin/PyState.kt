@@ -10,11 +10,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNamingStrategy
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
 import java.io.BufferedReader
 import java.io.BufferedWriter
-import java.io.File
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -74,7 +71,7 @@ sealed class OutgoingEvent {
     data class StartBleScanning(val timeout: Double) : OutgoingEvent()
 
     @Serializable @SerialName("connect_to_hub")
-    data class ConnectToHub(val connType: ConnectionType, val hubName: String?) : OutgoingEvent()
+    data class ConnectToHub(val connType: ConnectionType, val bleAddress: String) : OutgoingEvent()
 
     @Serializable @SerialName("disconnect_from_hub")
     object DisconnectFromHub : OutgoingEvent()
@@ -117,12 +114,16 @@ class PyState(val uvxPath: String) {
     var isRunning = false
         private set
 
-    private val eventListeners = CopyOnWriteArrayList<(IncomingEvent) -> Unit>()
+    private val eventListeners = mutableListOf<(IncomingEvent) -> Unit>()
     private val errorListeners = CopyOnWriteArrayList<(Throwable) -> Unit>()
     private val terminationListeners = CopyOnWriteArrayList<(Int) -> Unit>()
 
     fun addEventListener(listener: (IncomingEvent) -> Unit) {
-        eventListeners.add(listener)
+        synchronized(eventListeners) { eventListeners.add(listener) }
+    }
+
+    fun removeEventListener(listener: (IncomingEvent) -> Unit) {
+        synchronized(eventListeners) { eventListeners.remove(listener) }
     }
 
     fun addErrorListener(listener: (Throwable) -> Unit) {
@@ -139,7 +140,7 @@ class PyState(val uvxPath: String) {
         if (isRunning) return
         try {
             LOG.info("Starting brickpipe process via $uvxPath")
-            val procBuilder = ProcessBuilder(uvxPath, "brickpipe@0.3.1")
+            val procBuilder = ProcessBuilder(uvxPath, "brickpipe@0.4.0")
             val proc = procBuilder.start()
             process = proc
             reader = proc.inputStream.bufferedReader()
@@ -203,7 +204,9 @@ class PyState(val uvxPath: String) {
                 LOG.info("Received line from brickpipe: $lineStr")
                 try {
                     val event = serializer.decodeFromString<IncomingEvent>(lineStr)
-                    eventListeners.forEach { it(event) }
+                    synchronized(eventListeners) {
+                        eventListeners.forEach { it(event) }
+                    }
                 } catch (e: Exception) {
                     LOG.error("Failed to deserialize incoming event: $lineStr", e)
                 }
