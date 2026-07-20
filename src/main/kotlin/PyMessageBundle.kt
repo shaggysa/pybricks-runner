@@ -3,9 +3,8 @@ package xyz.shaggysa
 import com.intellij.DynamicBundle
 import org.jetbrains.annotations.Nls
 import org.jetbrains.annotations.PropertyKey
-import java.util.function.Supplier
 
-private const val BUNDLE = "messages.MyMessageBundle"
+private const val BUNDLE = "messages.PyMessageBundle"
 
 internal object PyMessageBundle {
     private val instance = DynamicBundle(PyMessageBundle::class.java, BUNDLE)
@@ -13,10 +12,5 @@ internal object PyMessageBundle {
     @JvmStatic
     fun message(key: @PropertyKey(resourceBundle = BUNDLE) String, vararg params: Any?): @Nls String {
         return instance.getMessage(key, *params)
-    }
-
-    @JvmStatic
-    fun lazyMessage(@PropertyKey(resourceBundle = BUNDLE) key: String, vararg params: Any?): Supplier<@Nls String> {
-        return instance.getLazyMessage(key, *params)
     }
 }

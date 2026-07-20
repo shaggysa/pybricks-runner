@@ -2,12 +2,23 @@ package xyz.shaggysa
 
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.project.Project
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNamingStrategy
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
+import java.io.BufferedReader
 import java.io.BufferedWriter
+import java.io.File
+import java.io.IOException
+import java.util.concurrent.CopyOnWriteArrayList
+
+private val LOG = Logger.getInstance("PybricksRunner")
 
 @OptIn(ExperimentalSerializationApi::class)
 val serializer = Json {
@@ -86,25 +97,188 @@ sealed class OutgoingEvent {
 
 fun BufferedWriter.sendEvent(event: OutgoingEvent) {
     val encodedEvent = serializer.encodeToString<OutgoingEvent>(event)
-    println("wrote event: $encodedEvent")
+    LOG.info("Writing outgoing event: $encodedEvent")
     try {
         this.write(encodedEvent)
         this.newLine()
         this.flush()
-    } catch (e: java.io.IOException) {
-        e.printStackTrace()
+    } catch (e: IOException) {
+        LOG.error("Failed to write event: $encodedEvent", e)
+        throw e
     }
-
 }
 
-class PyState(uvxPath: String) {
-    val brickpipe: Process = ProcessBuilder(uvxPath, "brickpipe@0.3.1").start()
-    val reader = brickpipe.inputStream.bufferedReader()
-    val writer = brickpipe.outputStream.bufferedWriter()
+class PyState(val uvxPath: String) {
+    private var process: Process? = null
+    private var reader: BufferedReader? = null
+    private var writer: BufferedWriter? = null
+    
+    @Volatile
+    var isRunning = false
+        private set
+
+    private val eventListeners = CopyOnWriteArrayList<(IncomingEvent) -> Unit>()
+    private val errorListeners = CopyOnWriteArrayList<(Throwable) -> Unit>()
+    private val terminationListeners = CopyOnWriteArrayList<(Int) -> Unit>()
+
+    fun addEventListener(listener: (IncomingEvent) -> Unit) {
+        eventListeners.add(listener)
+    }
+
+    fun addErrorListener(listener: (Throwable) -> Unit) {
+        errorListeners.add(listener)
+    }
+
+    fun addTerminationListener(listener: (Int) -> Unit) {
+        terminationListeners.add(listener)
+    }
+
+
+    @Synchronized
+    fun start() {
+        if (isRunning) return
+        try {
+            LOG.info("Starting brickpipe process via $uvxPath")
+            val procBuilder = ProcessBuilder(uvxPath, "brickpipe@0.3.1")
+            val proc = procBuilder.start()
+            process = proc
+            reader = proc.inputStream.bufferedReader()
+            writer = proc.outputStream.bufferedWriter()
+            isRunning = true
+
+            Thread {
+                readLoop()
+            }.apply {
+                name = "brickpipe-stdout-reader"
+                isDaemon = true
+                start()
+            }
+
+            Thread {
+                try {
+                    val errReader = proc.errorStream.bufferedReader()
+                    var line: String?
+                    while (errReader.readLine().also { line = it } != null) {
+                        LOG.warn("brickpipe stderr: $line")
+                    }
+                } catch (e: IOException) {
+                    LOG.debug("brickpipe stderr reader stopped", e)
+                }
+            }.apply {
+                name = "brickpipe-stderr-reader"
+                isDaemon = true
+                start()
+            }
+
+            Thread {
+                try {
+                    val exitCode = proc.waitFor()
+                    isRunning = false
+                    LOG.info("brickpipe process terminated with exit code $exitCode")
+                    terminationListeners.forEach { it(exitCode) }
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }.apply {
+                name = "brickpipe-watcher"
+                isDaemon = true
+                start()
+            }
+
+        } catch (e: Exception) {
+            isRunning = false
+            LOG.error("Failed to start brickpipe process", e)
+            errorListeners.forEach { it(e) }
+            throw e
+        }
+    }
+
+    private fun readLoop() {
+        val currentReader = reader ?: return
+        try {
+            var line: String? = null
+            while (isRunning && currentReader.readLine().also { line = it } != null) {
+                val lineStr = line ?: break
+                if (lineStr.trim().isEmpty()) continue
+                LOG.info("Received line from brickpipe: $lineStr")
+                try {
+                    val event = serializer.decodeFromString<IncomingEvent>(lineStr)
+                    eventListeners.forEach { it(event) }
+                } catch (e: Exception) {
+                    LOG.error("Failed to deserialize incoming event: $lineStr", e)
+                }
+            }
+        } catch (e: IOException) {
+            LOG.debug("brickpipe stdout reader stopped with exception", e)
+        } finally {
+            isRunning = false
+        }
+    }
+
+    @Synchronized
+    fun sendEvent(event: OutgoingEvent) {
+        val currentWriter = writer
+        if (currentWriter == null || !isRunning) {
+            throw IOException("brickpipe process is not running")
+        }
+        currentWriter.sendEvent(event)
+    }
+
+    @Synchronized
+    fun stop() {
+        if (!isRunning) return
+        isRunning = false
+        LOG.info("Stopping brickpipe process")
+        try {
+            sendEvent(OutgoingEvent.Exit)
+        } catch (e: Exception) {
+            // ignore failure to send Exit clean command
+        }
+        process?.waitFor()
+        process = null
+        reader = null
+        writer = null
+    }
+}
+
+@Service(Service.Level.PROJECT)
+class PyStateService(val project: Project) {
+    var pyState: PyState? = null
+        private set
+
+    @Synchronized
+    fun getOrCreatePyState(uvxPath: String): PyState {
+        val current = pyState
+        if (current != null && current.isRunning) {
+            return current
+        }
+        current?.stop()
+        val newState = PyState(uvxPath)
+        pyState = newState
+        return newState
+    }
+
+    @Synchronized
+    fun stopService() {
+        pyState?.stop()
+        pyState = null
+    }
 }
 
 class SendEventAction() : AnAction() {
-    override fun actionPerformed(p0: AnActionEvent) {
-        TODO("Not yet implemented")
+    override fun actionPerformed(event: AnActionEvent) {
+        val project = event.project ?: return
+        val service = project.getService(PyStateService::class.java)
+        val activeState = service?.pyState
+        if (activeState == null || !activeState.isRunning) {
+            println("SendEventAction: PyState process is not running.")
+            return
+        }
+        // Send a scan event as a safe placeholder action
+        try {
+            activeState.sendEvent(OutgoingEvent.StartBleScanning(5.0))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }
