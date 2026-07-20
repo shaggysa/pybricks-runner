@@ -11,8 +11,7 @@
     <vendor url="https://shaggysa.xyz">Shaggysa</vendor>
 
     <description><![CDATA[
-        A professional PyCharm / IntelliJ tool window to connect to Pybricks hubs, download, run, and cancel Python scripts.
-        Features include an asynchronous event reader, real-time download progress bar, read-only console for hub output, and robust IPC error handling.
+        A PyCharm / IntelliJ tool window to interact with Pybricks hubs.
         ]]></description>
 
     <!-- Product and plugin compatibility requirements.
