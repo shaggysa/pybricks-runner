@@ -11,6 +11,7 @@ plugins {
 dependencies {
     testImplementation(libs.junit)
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    compileOnly("org.jetbrains.pty4j:pty4j:0.13.10")
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {

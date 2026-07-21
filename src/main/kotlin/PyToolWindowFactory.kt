@@ -71,10 +71,10 @@ class PyToolWindowFactory : ToolWindowFactory {
         private val scanTimer = Timer(10_000) { stopScan() }
 
         private fun signalBars(rssi: Int): String = when {
-            rssi >= -50 -> "\u2588\u2588\u2588\u2588"
-            rssi >= -65 -> "\u2588\u2588\u2588\u2581"
-            rssi >= -75 -> "\u2588\u2588\u2581\u2581"
-            else        -> "\u2588\u2581\u2581\u2581"
+            rssi >= -50 -> "\u2581\u2583\u2585\u2587"
+            rssi >= -65 -> "\u2581\u2583\u2585 "
+            rssi >= -75 -> "\u2581\u2583  "
+            else        -> "\u2581   "
         }
 
         private val bleListener: (IncomingEvent) -> Unit = { event ->
@@ -508,6 +508,7 @@ class PyToolWindowFactory : ToolWindowFactory {
                     try {
                         isProgramDownloading = true
                         updateControlsState()
+                        updateStatus("Compiling...")
                         stateService.pyState?.sendEvent(OutgoingEvent.RecompileDownload(path))
                     } catch (e: Exception) {
                         Messages.showErrorDialog(project, "Could not send download command:\n${e.localizedMessage}", "Error")
@@ -525,6 +526,7 @@ class PyToolWindowFactory : ToolWindowFactory {
                     try {
                         isProgramDownloading = true
                         updateControlsState()
+                        updateStatus("Compiling...")
                         stateService.pyState?.sendEvent(OutgoingEvent.RecompileRun(path))
                     } catch (e: Exception) {
                         Messages.showErrorDialog(project, "Could not send download and run command:\n${e.localizedMessage}", "Error")

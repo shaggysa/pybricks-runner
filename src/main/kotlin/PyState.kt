@@ -10,9 +10,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNamingStrategy
+import com.pty4j.PtyProcessBuilder
 import java.io.BufferedReader
-import java.io.BufferedWriter
+import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 import java.util.concurrent.CopyOnWriteArrayList
 
 private val LOG = Logger.getInstance("PybricksRunner")
@@ -92,15 +94,14 @@ sealed class OutgoingEvent {
     object Exit: OutgoingEvent()
 }
 
-fun BufferedWriter.sendEvent(event: OutgoingEvent) {
+fun OutputStream.sendEvent(event: OutgoingEvent, proc: Process?) {
     val encodedEvent = serializer.encodeToString<OutgoingEvent>(event)
-    LOG.info("Writing outgoing event: $encodedEvent")
+    val bytes = (encodedEvent + "\n").toByteArray(Charsets.UTF_8)
     try {
-        this.write(encodedEvent)
-        this.newLine()
+        this.write(bytes)
         this.flush()
+        LOG.info("Sent an event to brickpipe: $encodedEvent")
     } catch (e: IOException) {
-        LOG.error("Failed to write event: $encodedEvent", e)
         throw e
     }
 }
@@ -108,7 +109,6 @@ fun BufferedWriter.sendEvent(event: OutgoingEvent) {
 class PyState(val uvxPath: String) {
     private var process: Process? = null
     private var reader: BufferedReader? = null
-    private var writer: BufferedWriter? = null
     
     @Volatile
     var isRunning = false
@@ -139,12 +139,22 @@ class PyState(val uvxPath: String) {
     fun start() {
         if (isRunning) return
         try {
-            LOG.info("Starting brickpipe process via $uvxPath")
-            val procBuilder = ProcessBuilder(uvxPath, "brickpipe@0.4.0")
-            val proc = procBuilder.start()
+            LOG.info("Starting brickpipe via $uvxPath")
+            val isWindows = System.getProperty("os.name").lowercase().contains("win")
+
+            // mpy-cross freezes on windows unless it has a PTY
+            val proc: Process = if (isWindows) {
+                PtyProcessBuilder(arrayOf(uvxPath, "-q", "brickpipe@0.4.0"))
+                    .setInitialColumns(200)
+                    .setInitialRows(50)
+                    .setConsole(true)
+                    .start()
+
+            } else {
+                ProcessBuilder(uvxPath, "brickpipe@0.4.0").start()
+            }
             process = proc
-            reader = proc.inputStream.bufferedReader()
-            writer = proc.outputStream.bufferedWriter()
+            reader = proc.inputStream.bufferedReader(Charsets.UTF_8)
             isRunning = true
 
             Thread {
@@ -163,7 +173,6 @@ class PyState(val uvxPath: String) {
                         LOG.warn("brickpipe stderr: $line")
                     }
                 } catch (e: IOException) {
-                    LOG.debug("brickpipe stderr reader stopped", e)
                 }
             }.apply {
                 name = "brickpipe-stderr-reader"
@@ -195,12 +204,13 @@ class PyState(val uvxPath: String) {
     }
 
     private fun readLoop() {
+        LOG.info("brickpipe stdout reader started")
         val currentReader = reader ?: return
         try {
             var line: String? = null
             while (isRunning && currentReader.readLine().also { line = it } != null) {
                 val lineStr = line ?: break
-                if (lineStr.trim().isEmpty()) continue
+                if (lineStr.isEmpty()) continue
                 LOG.info("Received line from brickpipe: $lineStr")
                 try {
                     val event = serializer.decodeFromString<IncomingEvent>(lineStr)
@@ -212,7 +222,7 @@ class PyState(val uvxPath: String) {
                 }
             }
         } catch (e: IOException) {
-            LOG.debug("brickpipe stdout reader stopped with exception", e)
+            LOG.warn("brickpipe stdout reader stopped with exception", e)
         } finally {
             isRunning = false
         }
@@ -220,11 +230,11 @@ class PyState(val uvxPath: String) {
 
     @Synchronized
     fun sendEvent(event: OutgoingEvent) {
-        val currentWriter = writer
-        if (currentWriter == null || !isRunning) {
+        val currentProcess = process
+        if (currentProcess == null || !isRunning) {
             throw IOException("brickpipe process is not running")
         }
-        currentWriter.sendEvent(event)
+        currentProcess.outputStream.sendEvent(event, currentProcess)
     }
 
     @Synchronized
@@ -240,7 +250,6 @@ class PyState(val uvxPath: String) {
         process?.waitFor()
         process = null
         reader = null
-        writer = null
     }
 }
 
