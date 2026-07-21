@@ -227,6 +227,7 @@ class PyToolWindowFactory : ToolWindowFactory {
         private var isConnected = false
         private var isConnecting = false
         private var isProgramRunning = false
+        private var isProgramDownloading = false
         private var selectedHubName: String? = null
         
         private var pendingAction: Runnable? = null
@@ -505,6 +506,8 @@ class PyToolWindowFactory : ToolWindowFactory {
                 }
                 ensureConnected {
                     try {
+                        isProgramDownloading = true
+                        updateControlsState()
                         stateService.pyState?.sendEvent(OutgoingEvent.RecompileDownload(path))
                     } catch (e: Exception) {
                         Messages.showErrorDialog(project, "Could not send download command:\n${e.localizedMessage}", "Error")
@@ -520,6 +523,8 @@ class PyToolWindowFactory : ToolWindowFactory {
                 }
                 ensureConnected {
                     try {
+                        isProgramDownloading = true
+                        updateControlsState()
                         stateService.pyState?.sendEvent(OutgoingEvent.RecompileRun(path))
                     } catch (e: Exception) {
                         Messages.showErrorDialog(project, "Could not send download and run command:\n${e.localizedMessage}", "Error")
@@ -638,14 +643,17 @@ class PyToolWindowFactory : ToolWindowFactory {
                 }
                 is IncomingEvent.DownloadProgressUpdate -> {
                     if (event.percentage.toInt() == 100) {
+                        isProgramDownloading = false
                         progressBar.isVisible = false
                         updateStatus("Connected")
                     } else {
+                        isProgramDownloading = true
                         progressBar.isVisible = true
                         progressBar.value = event.percentage.toInt()
                         progressBar.string = "${String.format("%.1f", event.percentage)}%"
                         updateStatus("Downloading... ")
                     }
+                    updateControlsState()
                 }
                 is IncomingEvent.ProgramStarted -> {
                     isProgramRunning = true
@@ -752,16 +760,19 @@ class PyToolWindowFactory : ToolWindowFactory {
             val activeState = stateService.pyState
             val isProcessRunning = activeState != null && activeState.isRunning
 
+
+            val controlsDisabled = isProcessRunning && !isProgramRunning && !isProgramDownloading
+
             // Program selection
-            programPathField.isEditable = isProcessRunning && !isProgramRunning
-            chooseFileBtn.isEnabled = isProcessRunning && !isProgramRunning
-            useActiveFileBtn.isEnabled = isProcessRunning && !isProgramRunning
+            programPathField.isEditable = controlsDisabled
+            chooseFileBtn.isEnabled = controlsDisabled
+            useActiveFileBtn.isEnabled = controlsDisabled
 
             // Command buttons
-            downloadBtn.isEnabled = isProcessRunning && !isProgramRunning
-            downloadRunBtn.isEnabled = isProcessRunning && !isProgramRunning
-            runStoredBtn.isEnabled = isProcessRunning && !isProgramRunning
-            cancelBtn.isEnabled = isProcessRunning && isProgramRunning
+            downloadBtn.isEnabled = controlsDisabled
+            downloadRunBtn.isEnabled = controlsDisabled
+            runStoredBtn.isEnabled = controlsDisabled
+            cancelBtn.isEnabled = isProgramRunning
         }
     }
 }
