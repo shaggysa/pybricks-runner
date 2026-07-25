@@ -2,8 +2,11 @@ package xyz.shaggysa
 
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
@@ -509,6 +512,7 @@ class PyToolWindowFactory : ToolWindowFactory {
                         isProgramDownloading = true
                         updateControlsState()
                         updateStatus("Compiling...")
+                        saveProject()
                         stateService.pyState?.sendEvent(OutgoingEvent.RecompileDownload(path))
                     } catch (e: Exception) {
                         Messages.showErrorDialog(project, "Could not send download command:\n${e.localizedMessage}", "Error")
@@ -527,6 +531,7 @@ class PyToolWindowFactory : ToolWindowFactory {
                         isProgramDownloading = true
                         updateControlsState()
                         updateStatus("Compiling...")
+                        saveProject()
                         stateService.pyState?.sendEvent(OutgoingEvent.RecompileRun(path))
                     } catch (e: Exception) {
                         Messages.showErrorDialog(project, "Could not send download and run command:\n${e.localizedMessage}", "Error")
@@ -675,8 +680,8 @@ class PyToolWindowFactory : ToolWindowFactory {
                 }
                 is IncomingEvent.CompileError -> {
                     isProgramRunning = false
+                    isProgramDownloading = false
                     updateStatus("Connected")
-                    // Hide progress bar on compilation error
                     progressBar.isVisible = false
                     progressBar.value = 0
                     progressBar.string = "Compile failed"
@@ -775,6 +780,12 @@ class PyToolWindowFactory : ToolWindowFactory {
             downloadRunBtn.isEnabled = controlsDisabled
             runStoredBtn.isEnabled = controlsDisabled
             cancelBtn.isEnabled = isProgramRunning
+        }
+
+        private fun saveProject() {
+            ApplicationManager.getApplication().invokeAndWait {
+                FileDocumentManager.getInstance().saveAllDocuments()
+            }
         }
     }
 }
