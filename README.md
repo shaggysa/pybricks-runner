@@ -1,9 +1,12 @@
 # Pybricks-Runner
 
-An Intellij/Pycharm plugin that provides a clean gui for interacting with pybricksdev. 
+An Intellij/Pycharm plugin that provides a clean gui for interacting with pybricks hubs. 
+
+## Demo
+![Demo](./images/demo.gif)
 
 # Usage
-Uvx is required to interact with pybricksdev. You can find installation instructions [here](https://docs.astral.sh/uv/getting-started/installation/).
+Uvx is required to interact with [brickpipe](https://github.com/shaggysa/brickpipe). You can find installation instructions [here](https://docs.astral.sh/uv/getting-started/installation/).
 
 ## Installation
 1: Navigate to the [actions](https://github.com/shaggysa/pybricks-runner/actions) tab in the github repository and select the latest passing build
