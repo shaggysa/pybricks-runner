@@ -1,8 +1,8 @@
-name: Build
+name: Release
 
 on:
-  push:
-    branches: [ "main" ]
+  release:
+    types: [ "published" ]
 
 jobs:
   build:
@@ -26,8 +26,9 @@ jobs:
       - name: Build Plugin Zip
         run: ./gradlew buildPlugin
 
-      - name: Upload Plugin Artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
         with:
-          name: pybricks-runner
-          path: build/distributions/*.zip
+          files: build/distributions/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

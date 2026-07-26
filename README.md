@@ -9,15 +9,13 @@ An Intellij/Pycharm plugin that provides a clean gui for interacting with pybric
 Uvx is required to interact with [brickpipe](https://github.com/shaggysa/brickpipe). You can find installation instructions [here](https://docs.astral.sh/uv/getting-started/installation/).
 
 ## Installation
-1: Navigate to the [actions](https://github.com/shaggysa/pybricks-runner/actions) tab in the github repository and select the latest passing build
+1: Navigate to the [releases](https://github.com/shaggysa/pybricks-runner/releases) tab in the github repository and select the latest release
 
-2: Scroll down to `Artifacts` and download the `pybricks-runner` artifact.
+2: Scroll down to `Assets` and download the `pybricks-runner-[version].zip` asset.
 
-3: Extract the archive.
+3: Open Pycharm/Intellij and navigate to `IDE and Project Settings`->`Plugins`->`Manage Repositories, Configure Proxy, or Install Plugin from Disk`(next to `Installed` on the top bar)->`Install Plugin from Disk`.
 
-4: Open Pycharm/Intellij and navigate to `IDE and Project Settings`->`Plugins`->`Manage Repositories, Configure Proxy, or Install Plugin from Disk`(next to `Installed` on the top bar)->`Install Plugin from Disk`.
-
-5: Select the extracted zip archive.
+4: Select the zip archive.
 
 ### Build from source (optional)
 1: Clone the repo.
