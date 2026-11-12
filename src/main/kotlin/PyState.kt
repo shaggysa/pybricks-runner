@@ -144,14 +144,14 @@ class PyState(val uvxPath: String) {
 
             // mpy-cross freezes on windows unless it has a PTY
             val proc: Process = if (isWindows) {
-                PtyProcessBuilder(arrayOf(uvxPath, "-q", "brickpipe@0.4.0"))
+                PtyProcessBuilder(arrayOf(uvxPath, "--python", "3.14", "brickpipe@0.4.0"))
                     .setInitialColumns(200)
                     .setInitialRows(50)
                     .setConsole(true)
                     .start()
 
             } else {
-                ProcessBuilder(uvxPath, "brickpipe@0.4.0").start()
+                ProcessBuilder(uvxPath, "--python", "3.14", "brickpipe@0.4.0").start()
             }
             process = proc
             reader = proc.inputStream.bufferedReader(Charsets.UTF_8)
